@@ -281,6 +281,7 @@ interface MediaSession {
 	sourceValue: string
 	title: string
 	artist: string
+	rawInfoJson?: string
 	createdAt: number
 }
 
@@ -327,6 +328,7 @@ function createSession(
 	sourceValue: string,
 	title = 'Audio',
 	artist = '',
+	rawInfoJson?: string,
 ): MediaSession {
 	const id = crypto.randomBytes(6).toString('base64url')
 	const s: MediaSession = {
@@ -338,6 +340,7 @@ function createSession(
 		sourceValue,
 		title,
 		artist,
+		rawInfoJson,
 		createdAt: Date.now(),
 	}
 	sessions.set(id, s)
@@ -378,6 +381,7 @@ function buildKeyboard(job: Job): InlineKeyboard {
 		job.url,
 		job.info.title || 'Audio',
 		job.info.uploader,
+		job.info.rawInfoJson,
 	)
 	kb.text(d.qAudio, `dl:${job.id}:audio`).text(d.qShazam, `shz:${sess.id}`).row()
 	kb.text(d.btnStudioEffects, `stu:${sess.id}`).row()
@@ -396,6 +400,7 @@ function postDownloadKeyboard(job: Job, usedQuality: Quality): InlineKeyboard {
 		job.url,
 		job.info.title || 'Audio',
 		job.info.uploader,
+		job.info.rawInfoJson,
 	)
 	const kb = new InlineKeyboard()
 	if (usedQuality !== 'audio') {
@@ -710,6 +715,7 @@ async function processJob(job: Job, quality: Quality): Promise<void> {
 				(p) => status.set(`${d.downloading(what)}\n${progressBar(p)}`),
 				signal,
 				job.lang,
+				job.info.rawInfoJson,
 			)
 
 			for (const [i, file] of files.entries()) {
@@ -758,7 +764,7 @@ async function obtainSessionMediaFile(sess: MediaSession, workDir: string, signa
 	if (sess.sourceType === 'query') {
 		return await downloadSongByQuery(sess.sourceValue, workDir, signal, sess.lang)
 	}
-	const files = await download(sess.sourceValue, 'audio', workDir, undefined, signal, sess.lang)
+	const files = await download(sess.sourceValue, 'audio', workDir, undefined, signal, sess.lang, sess.rawInfoJson)
 	return files[0]
 }
 

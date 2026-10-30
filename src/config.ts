@@ -90,8 +90,8 @@ export const config = {
 	maxConcurrentJobs: Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS || 2)),
 	/** Ishga tushganda yt-dlp ni avtomatik yangilash (Instagram tez-tez o'zgaradi) */
 	autoUpdateYtdlp: (process.env.YTDLP_AUTO_UPDATE ?? 'true').toLowerCase() !== 'false',
-	/** libx264 preset: ultrafast..veryslow. Sekinroq = sifatliroq/kichikroq fayl */
-	x264Preset: process.env.FFMPEG_PRESET || 'medium',
+	/** libx264 preset: ultrafast..veryslow. Cloud 0.1 CPU uchun superfast/veryfast 8-10x tezroq */
+	x264Preset: process.env.FFMPEG_PRESET || 'veryfast',
 	tmpDir: path.join(os.tmpdir(), 'ig-downloader-bot'),
 }
 

@@ -56,6 +56,8 @@ export interface MediaInfo {
 	entries: EntryInfo[]
 	maxShortSide: number
 	totalDuration: number
+	/** yt-dlp -J natijasi: ikkinchi marta saytni skanerlamasdan --load-info-json orqali 2x tez yuklash uchun */
+	rawInfoJson?: string
 }
 
 interface YtFormat {
@@ -84,20 +86,23 @@ interface YtInfo {
 	entries?: (YtInfo | null)[]
 }
 
-function commonArgs(): string[] {
+function commonArgs(needsJsRuntime = false): string[] {
 	const args = [
 		'--no-warnings',
 		'--no-check-certificates',
 		'--socket-timeout',
-		'30',
+		'20',
 		'--retries',
-		'5',
+		'3',
 		'--fragment-retries',
-		'5',
+		'3',
+		'--concurrent-fragments',
+		'4',
 		'--yes-playlist',
-		'--js-runtimes',
-		`node:${process.execPath}`,
 	]
+	if (needsJsRuntime) {
+		args.push('--js-runtimes', `node:${process.execPath}`)
+	}
 	if (config.cookiesFile) args.push('--cookies', config.cookiesFile)
 	return args
 }
@@ -157,7 +162,8 @@ function entryFrom(info: YtInfo): EntryInfo {
 /** Video haqida ma'lumot olish (yuklamasdan) */
 export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaInfo> {
 	const d = t(lang)
-	const res = await run(config.ytdlpPath, [...commonArgs(), '-J', '--', url], {
+	const platform = detectPlatform(url)
+	const res = await run(config.ytdlpPath, [...commonArgs(platform === 'youtube'), '-J', '--', url], {
 		timeoutMs: 90_000,
 	})
 	if (res.code !== 0) {
@@ -181,7 +187,7 @@ export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaIn
 		.replace(/\s+/g, ' ')
 		.trim()
 	return {
-		platform: detectPlatform(url),
+		platform,
 		title: caption,
 		uploader:
 			info.uploader ||
@@ -196,6 +202,7 @@ export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaIn
 		entries,
 		maxShortSide: entries.reduce((m, e) => Math.max(m, e.maxShortSide), 0),
 		totalDuration: entries.reduce((s, e) => s + e.duration, 0),
+		rawInfoJson: info._type !== 'playlist' ? res.stdout : undefined,
 	}
 }
 
@@ -226,35 +233,61 @@ export async function download(
 	onProgress?: (percent: number) => void,
 	signal?: AbortSignal,
 	lang: Lang = 'uz',
+	rawInfoJson?: string,
 ): Promise<string[]> {
 	fs.mkdirSync(outDir, { recursive: true })
-	const args = [
-		...commonArgs(),
-		...formatArgs(quality),
-		'--newline',
-		'--progress-template',
-		'download:__P__%(progress._percent_str)s',
-		'-o',
-		path.join(outDir, '%(autonumber)s_%(id)s.%(ext)s'),
-	]
-	if (config.ffmpegPath !== 'ffmpeg') args.push('--ffmpeg-location', config.ffmpegPath)
-	args.push('--', url)
+	const platform = detectPlatform(url)
 
-	const res = await run(config.ytdlpPath, args, {
-		timeoutMs: 15 * 60_000,
-		signal,
-		onLine: (line) => {
-			const m = line.match(/__P__\s*([\d.]+)%/)
-			if (m && onProgress) onProgress(Number(m[1]))
-		},
-	})
+	const listDownloadedFiles = () =>
+		fs
+			.readdirSync(outDir)
+			// .part / vaqtinchalik va birlashtirilmagan (name.f123.mp4) hamda _info.json fayllarni tashlab ketamiz
+			.filter(
+				(f) =>
+					f !== '_info.json' &&
+					!/\.(part|ytdl|temp|jpg|jpeg|png|webp|json)$/i.test(f) &&
+					!/\.f[^.]+\.[^.]+$/.test(f),
+			)
+			.sort()
+			.map((f) => path.join(outDir, f))
 
-	const files = fs
-		.readdirSync(outDir)
-		// .part / vaqtinchalik va birlashtirilmagan (name.f123.mp4) fayllarni tashlab ketamiz
-		.filter((f) => !/\.(part|ytdl|temp|jpg|jpeg|png|webp)$/i.test(f) && !/\.f[^.]+\.[^.]+$/.test(f))
-		.sort()
-		.map((f) => path.join(outDir, f))
+	const runDownload = async (useInfoJson: boolean) => {
+		const args = [
+			...commonArgs(platform === 'youtube'),
+			...formatArgs(quality),
+			'--newline',
+			'--progress-template',
+			'download:__P__%(progress._percent_str)s',
+			'-o',
+			path.join(outDir, '%(autonumber)s_%(id)s.%(ext)s'),
+		]
+		if (config.ffmpegPath !== 'ffmpeg') args.push('--ffmpeg-location', config.ffmpegPath)
+		if (useInfoJson && rawInfoJson) {
+			const infoFile = path.join(outDir, '_info.json')
+			fs.writeFileSync(infoFile, rawInfoJson)
+			args.push('--load-info-json', infoFile)
+		} else {
+			args.push('--', url)
+		}
+
+		return await run(config.ytdlpPath, args, {
+			timeoutMs: 15 * 60_000,
+			signal,
+			onLine: (line) => {
+				const m = line.match(/__P__\s*([\d.]+)%/)
+				if (m && onProgress) onProgress(Number(m[1]))
+			},
+		})
+	}
+
+	// Agar fetchInfo dan tayyor JSON bo'lsa, saytni ikkinchi marta skanerlamasdan to'g'ridan-to'g'ri oqimni yuklaymiz!
+	let res = await runDownload(!!rawInfoJson)
+	let files = listDownloadedFiles()
+
+	if (files.length === 0 && rawInfoJson && !signal?.aborted) {
+		res = await runDownload(false)
+		files = listDownloadedFiles()
+	}
 
 	if (res.code !== 0 && files.length === 0) {
 		console.error('[yt-dlp download]', res.stderr.trim())
@@ -273,7 +306,7 @@ export async function downloadSongByQuery(
 ): Promise<string> {
 	fs.mkdirSync(outDir, { recursive: true })
 	const args = [
-		...commonArgs(),
+		...commonArgs(true),
 		'--no-playlist',
 		'-f',
 		'ba/b',
