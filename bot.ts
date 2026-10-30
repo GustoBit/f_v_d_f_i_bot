@@ -1504,13 +1504,34 @@ async function main() {
 		}
 	}
 
-	const stop = () => bot.stop()
+	let shuttingDown = false
+	const stop = () => {
+		shuttingDown = true
+		void bot.stop().finally(() => process.exit(0))
+	}
 	process.once('SIGINT', stop)
 	process.once('SIGTERM', stop)
 
-	await bot.start({
-		onStart: (botInfo) => console.log(`✅ @${botInfo.username} (GOD-TIER) muvaffaqiyatli ishga tushdi!`),
-	})
+	// Render rolling-deploy paytida eski konteyner yopilguncha (5-10s) 409 Conflict bersa,
+	// konteyner qulab tushmasdan har 3 soniyada qayta ulanadi!
+	while (!shuttingDown) {
+		try {
+			await bot.start({
+				drop_pending_updates: false,
+				onStart: (botInfo) =>
+					console.log(`✅ @${botInfo.username} (GOD-TIER) muvaffaqiyatli ishga tushdi!`),
+			})
+			break
+		} catch (err: any) {
+			const code = err?.error_code ?? err?.status
+			if (code === 409 && !shuttingDown) {
+				console.warn('⏳ Eski konteyner yopilishini kutmoqda (409 Conflict), 3s dan keyin qayta ulanadi...')
+				await new Promise((r) => setTimeout(r, 3000))
+				continue
+			}
+			throw err
+		}
+	}
 }
 
 main().catch((err) => {
