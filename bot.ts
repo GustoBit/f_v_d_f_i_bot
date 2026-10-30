@@ -283,6 +283,9 @@ interface MediaSession {
 	title: string
 	artist: string
 	rawInfoJson?: string
+	/** Agar query bo'yicha to'liq qo'shiq topilmasa, asl video/audio manbaga qaytish (fallback) */
+	fallbackSourceType?: 'url' | 'tg'
+	fallbackSourceValue?: string
 	createdAt: number
 }
 
@@ -769,7 +772,30 @@ async function obtainSessionMediaFile(sess: MediaSession, workDir: string, signa
 		return dest
 	}
 	if (sess.sourceType === 'query') {
-		return await downloadSongByQuery(sess.sourceValue, workDir, signal, sess.lang)
+		try {
+			return await downloadSongByQuery(sess.sourceValue, workDir, signal, sess.lang)
+		} catch (err) {
+			if (signal.aborted) throw err
+			// Agar cloud serverda to'liq qo'shiq qidiruvi o'tmasa, foydalanuvchi tashlagan asl video/audioni ishlatamiz!
+			if (sess.fallbackSourceType === 'tg' && sess.fallbackSourceValue) {
+				const dest = path.join(workDir, 'input_media')
+				await downloadTelegramFile(sess.fallbackSourceValue, dest, signal, sess.lang)
+				return dest
+			}
+			if (sess.fallbackSourceType === 'url' && sess.fallbackSourceValue) {
+				const files = await download(
+					sess.fallbackSourceValue,
+					'audio',
+					workDir,
+					undefined,
+					signal,
+					sess.lang,
+					sess.rawInfoJson,
+				)
+				return files[0]
+			}
+			throw err
+		}
 	}
 	const files = await download(sess.sourceValue, 'audio', workDir, undefined, signal, sess.lang, sess.rawInfoJson)
 	return files[0]
@@ -815,7 +841,12 @@ async function runShazamTask(sess: MediaSession, statusMsgId: number): Promise<v
 			songQuery,
 			track.title,
 			track.artist,
+			sess.rawInfoJson,
 		)
+		if (sess.sourceType === 'tg' || sess.sourceType === 'url') {
+			songSess.fallbackSourceType = sess.sourceType
+			songSess.fallbackSourceValue = sess.sourceValue
+		}
 
 		const lines = [
 			d.shazamFoundTitle,

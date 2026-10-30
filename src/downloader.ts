@@ -346,7 +346,13 @@ export async function downloadWithInfo(
 	return { files, info: parsedInfo }
 }
 
-/** Qidiruv so'rovi bo'yicha to'liq MP3 qo'shiqni yuklab olish (Shazam topilgandan keyin) */
+/**
+ * Qidiruv so'rovi bo'yicha to'liq MP3 qo'shiqni yuklab olish (Shazam topilgandan keyin).
+ * Cloud serverlarda (Render/AWS) YouTube bot-tekshiruvi chiqmasligi uchun:
+ * 1) SoundCloud (scsearch1:) — cloud serverda eng tezkor va bloksiz
+ * 2) YouTube (ytsearch1:) — localhost va uy internetida
+ * 3) BiliBili (bilisearch1:) — global zaxira manba
+ */
 export async function downloadSongByQuery(
 	query: string,
 	outDir: string,
@@ -354,34 +360,46 @@ export async function downloadSongByQuery(
 	lang: Lang = 'uz',
 ): Promise<string> {
 	fs.mkdirSync(outDir, { recursive: true })
-	const args = [
-		...commonArgs(true),
-		'--no-playlist',
-		'-f',
-		'ba/b',
-		'-x',
-		'--audio-format',
-		'mp3',
-		'--audio-quality',
-		'0',
-		'-o',
-		path.join(outDir, 'song.%(ext)s'),
-	]
-	if (config.ffmpegPath !== 'ffmpeg') args.push('--ffmpeg-location', config.ffmpegPath)
-	args.push('--', `ytsearch1:${query}`)
 
-	const res = await run(config.ytdlpPath, args, {
-		timeoutMs: 4 * 60_000,
-		signal,
-	})
-	const files = fs
-		.readdirSync(outDir)
-		.filter((f) => f.endsWith('.mp3'))
-		.map((f) => path.join(outDir, f))
-	if (res.code !== 0 || files.length === 0) {
-		throw new UserError(t(lang).errSongDownloadFailed)
+	const searchTargets: { prefix: string; needsJs: boolean }[] = [
+		{ prefix: 'scsearch1', needsJs: false },
+		{ prefix: 'ytsearch1', needsJs: true },
+		{ prefix: 'bilisearch1', needsJs: false },
+	]
+
+	for (const target of searchTargets) {
+		if (signal?.aborted) break
+		const args = [
+			...commonArgs(target.needsJs),
+			'--no-playlist',
+			'-f',
+			'ba/b',
+			'-x',
+			'--audio-format',
+			'mp3',
+			'--audio-quality',
+			'0',
+			'-o',
+			path.join(outDir, 'song.%(ext)s'),
+		]
+		if (config.ffmpegPath !== 'ffmpeg') args.push('--ffmpeg-location', config.ffmpegPath)
+		args.push('--', `${target.prefix}:${query}`)
+
+		const res = await run(config.ytdlpPath, args, {
+			timeoutMs: 2 * 60_000,
+			signal,
+		}).catch(() => ({ code: 1, stdout: '', stderr: '' }))
+
+		const files = fs
+			.readdirSync(outDir)
+			.filter((f) => f.endsWith('.mp3'))
+			.map((f) => path.join(outDir, f))
+		if (res.code === 0 && files.length > 0) {
+			return files[0]
+		}
 	}
-	return files[0]
+
+	throw new UserError(t(lang).errSongDownloadFailed)
 }
 
 /** yt-dlp ni eng so'nggi versiyaga yangilash */
