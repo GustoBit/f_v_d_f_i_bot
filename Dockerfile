@@ -28,6 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV NODE_ENV=production
 ENV FFMPEG_PATH=/usr/bin/ffmpeg
 ENV YTDLP_PATH=/usr/local/bin/yt-dlp
+# Docker build paytida eng oxirgi yt-dlp o'rnatilgani uchun ishga tushganda GitHub API limitiga tushmaslik
+ENV YTDLP_AUTO_UPDATE=false
 ENV PORT=7860
 
 COPY package.json package-lock.json ./

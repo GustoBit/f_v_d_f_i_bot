@@ -1445,6 +1445,15 @@ async function main() {
 			.listen(port, '0.0.0.0', () => {
 				console.log(`🌐 Health-check server port ${port} da ishga tushdi`)
 			})
+
+		// Render bepul tarifida uxlab qolmasligi uchun (Self-Ping Keep-Alive)
+		const externalUrl = process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL
+		if (externalUrl) {
+			setInterval(() => {
+				fetch(externalUrl).catch(() => {})
+			}, 10 * 60_000).unref()
+			console.log(`🔄 Keep-Alive yoqildi: ${externalUrl} (har 10 daqiqada)`)
+		}
 	}
 
 	const stop = () => bot.stop()

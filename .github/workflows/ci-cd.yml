@@ -5,6 +5,9 @@ on:
     branches: [main, master]
   pull_request:
     branches: [main, master]
+  schedule:
+    # Har 10 daqiqada Render serverni uyg'oq ushlab turish uchun
+    - cron: '*/10 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -12,8 +15,17 @@ permissions:
   packages: write
 
 jobs:
+  keep-alive:
+    name: 💓 Render Server Keep-Alive Ping
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping https://f-v-d-f-i-bot.onrender.com
+        run: curl -fsSL https://f-v-d-f-i-bot.onrender.com/ || true
+
   build-and-compile:
     name: 🔨 GitHub'da TypeScript kompilyatsiya va tekshiruv
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - name: 📥 Kodni yuklab olish (Checkout)
