@@ -1,0 +1,85 @@
+name: CI/CD — Build, Typecheck & Deploy
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-compile:
+    name: 🔨 GitHub'da TypeScript kompilyatsiya va tekshiruv
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Kodni yuklab olish (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 🟢 Node.js 22 o'rnatish
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 📦 Kutubxonalarni o'rnatish
+        env:
+          YOUTUBE_DL_SKIP_DOWNLOAD: 'true'
+        run: npm ci --ignore-scripts
+
+      - name: 🔍 TypeScript tekshiruvi (Typecheck)
+        run: npm run typecheck
+
+      - name: ⚙️ JavaScript'ga kompilyatsiya qilish (dist/)
+        run: npm run build
+
+      - name: 📤 Tayyor kompilyatsiya bo'lgan dist/ fayllarini saqlash
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-bot-dist
+          path: |
+            dist/
+            assets/
+            package.json
+            package-lock.json
+
+  docker-publish:
+    name: 🐳 Docker obrazni yig'ish (GHCR) va Serverga Deploy
+    needs: build-and-compile
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+
+      - name: 🔐 GitHub Container Registry (GHCR) ga kirish
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏷 Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha
+
+      - name: 🏗 Docker obrazni kompilyatsiya qilish va GHCR ga yuklash
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: 🚀 Render / Koyeb Deploy Webhook (agar DEPLOY_WEBHOOK_URL kiritilgan bo'lsa)
+        if: env.WEBHOOK_URL != ''
+        env:
+          WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+        run: curl -fsSL -X POST "$WEBHOOK_URL"

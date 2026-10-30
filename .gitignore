@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.env
+cookies.txt
+data/
+*.mp4
+*.mp3
+!assets/brand/*.mp4

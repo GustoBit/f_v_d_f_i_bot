@@ -1,0 +1,28 @@
+{
+  "name": "free-video-downloader-from-instagram-bot",
+  "version": "3.0.0",
+  "description": "GOD-TIER Video Downloader (Instagram/TikTok/YouTube/Pinterest), Shazam & Audio Studio Telegram Bot",
+  "main": "dist/bot.js",
+  "scripts": {
+    "start": "tsx bot.ts",
+    "start:prod": "node dist/bot.js",
+    "dev": "tsx watch bot.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "update-ytdlp": "node -e \"require('youtube-dl-exec').update().then(r=>console.log(r.stdout))\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "ffmpeg-static": "^5.3.0",
+    "grammy": "^1.46.0",
+    "youtube-dl-exec": "^3.1.19"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

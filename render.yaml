@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: ig-video-downloader-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: MAX_CONCURRENT_JOBS
+        value: "2"
+      - key: PORT
+        value: "7860"
