@@ -159,6 +159,46 @@ function entryFrom(info: YtInfo): EntryInfo {
 	}
 }
 
+/** Tezkor (0ms) boshlang'ich MediaInfo — tugmalarni kutmasdan 0.1 soniyada chiqarish uchun */
+export function quickMediaInfo(url: string): MediaInfo {
+	return {
+		platform: detectPlatform(url),
+		title: '',
+		uploader: '',
+		entries: [{ id: '', title: '', duration: 0, maxShortSide: 0 }],
+		maxShortSide: 0,
+		totalDuration: 0,
+	}
+}
+
+export function parseYtInfoToMediaInfo(info: YtInfo, url: string, rawJson?: string): MediaInfo {
+	const rawEntries =
+		info._type === 'playlist' ? (info.entries ?? []).filter((e): e is YtInfo => !!e) : [info]
+	const entries = rawEntries.map(entryFrom)
+	const firstEntry = rawEntries[0]
+	const caption = (info.description || info.title || firstEntry?.description || firstEntry?.title || '')
+		.replace(/\s+/g, ' ')
+		.trim()
+	return {
+		platform: detectPlatform(url),
+		title: caption,
+		uploader:
+			info.uploader ||
+			info.channel ||
+			info.uploader_id ||
+			firstEntry?.uploader ||
+			firstEntry?.channel ||
+			'',
+		thumbnail: info.thumbnail || firstEntry?.thumbnail || undefined,
+		viewCount: info.view_count ?? firstEntry?.view_count ?? undefined,
+		likeCount: info.like_count ?? firstEntry?.like_count ?? undefined,
+		entries: entries.length > 0 ? entries : [{ id: '', title: '', duration: 0, maxShortSide: 0 }],
+		maxShortSide: entries.reduce((m, e) => Math.max(m, e.maxShortSide), 0),
+		totalDuration: entries.reduce((s, e) => s + e.duration, 0),
+		rawInfoJson: info._type !== 'playlist' ? rawJson : undefined,
+	}
+}
+
 /** Video haqida ma'lumot olish (yuklamasdan) */
 export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaInfo> {
 	const d = t(lang)
@@ -176,34 +216,9 @@ export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaIn
 	} catch {
 		throw new UserError(d.errDownloadFailed)
 	}
-
-	const rawEntries =
-		info._type === 'playlist' ? (info.entries ?? []).filter((e): e is YtInfo => !!e) : [info]
-	const entries = rawEntries.map(entryFrom)
-	if (entries.length === 0) throw new UserError(d.errNoVideo)
-
-	const firstEntry = rawEntries[0]
-	const caption = (info.description || info.title || firstEntry?.description || firstEntry?.title || '')
-		.replace(/\s+/g, ' ')
-		.trim()
-	return {
-		platform,
-		title: caption,
-		uploader:
-			info.uploader ||
-			info.channel ||
-			info.uploader_id ||
-			firstEntry?.uploader ||
-			firstEntry?.channel ||
-			'',
-		thumbnail: info.thumbnail || firstEntry?.thumbnail || undefined,
-		viewCount: info.view_count ?? firstEntry?.view_count ?? undefined,
-		likeCount: info.like_count ?? firstEntry?.like_count ?? undefined,
-		entries,
-		maxShortSide: entries.reduce((m, e) => Math.max(m, e.maxShortSide), 0),
-		totalDuration: entries.reduce((s, e) => s + e.duration, 0),
-		rawInfoJson: info._type !== 'playlist' ? res.stdout : undefined,
-	}
+	const parsed = parseYtInfoToMediaInfo(info, url, res.stdout)
+	if (parsed.entries.length === 0) throw new UserError(d.errNoVideo)
+	return parsed
 }
 
 function formatArgs(quality: Quality): string[] {
@@ -222,9 +237,14 @@ function formatArgs(quality: Quality): string[] {
 	}
 }
 
+export interface DownloadResult {
+	files: string[]
+	info?: MediaInfo
+}
+
 /**
  * Videoni (yoki karuseldagi barcha videolarni) yuklab olish.
- * @returns yuklangan fayllar ro'yxati (tartib bo'yicha)
+ * Bir urunishda (--write-info-json bilan) ham videoni, ham ma'lumotlarni oladi!
  */
 export async function download(
 	url: string,
@@ -235,13 +255,26 @@ export async function download(
 	lang: Lang = 'uz',
 	rawInfoJson?: string,
 ): Promise<string[]> {
+	const res = await downloadWithInfo(url, quality, outDir, onProgress, signal, lang, rawInfoJson)
+	return res.files
+}
+
+export async function downloadWithInfo(
+	url: string,
+	quality: Quality,
+	outDir: string,
+	onProgress?: (percent: number) => void,
+	signal?: AbortSignal,
+	lang: Lang = 'uz',
+	rawInfoJson?: string,
+): Promise<DownloadResult> {
 	fs.mkdirSync(outDir, { recursive: true })
 	const platform = detectPlatform(url)
 
 	const listDownloadedFiles = () =>
 		fs
 			.readdirSync(outDir)
-			// .part / vaqtinchalik va birlashtirilmagan (name.f123.mp4) hamda _info.json fayllarni tashlab ketamiz
+			// .part / vaqtinchalik va birlashtirilmagan (name.f123.mp4) hamda .json fayllarni tashlab ketamiz
 			.filter(
 				(f) =>
 					f !== '_info.json' &&
@@ -267,7 +300,7 @@ export async function download(
 			fs.writeFileSync(infoFile, rawInfoJson)
 			args.push('--load-info-json', infoFile)
 		} else {
-			args.push('--', url)
+			args.push('--write-info-json', '--', url)
 		}
 
 		return await run(config.ytdlpPath, args, {
@@ -280,7 +313,6 @@ export async function download(
 		})
 	}
 
-	// Agar fetchInfo dan tayyor JSON bo'lsa, saytni ikkinchi marta skanerlamasdan to'g'ridan-to'g'ri oqimni yuklaymiz!
 	let res = await runDownload(!!rawInfoJson)
 	let files = listDownloadedFiles()
 
@@ -294,7 +326,24 @@ export async function download(
 		throw explainYtDlpError(res.stderr, lang)
 	}
 	if (files.length === 0) throw new UserError(t(lang).errDownloadFailed)
-	return files
+
+	// Yozilgan .info.json fayldan video tavsifi va muallifini o'qib olamiz (ikkinchi marta yt-dlp chaqirmaslik uchun!)
+	let parsedInfo: MediaInfo | undefined
+	try {
+		const jsonFiles = fs
+			.readdirSync(outDir)
+			.filter((f) => f.endsWith('.info.json'))
+			.sort()
+		if (jsonFiles.length > 0) {
+			const raw = fs.readFileSync(path.join(outDir, jsonFiles[0]), 'utf8')
+			const ytInfo = JSON.parse(raw) as YtInfo
+			parsedInfo = parseYtInfoToMediaInfo(ytInfo, url, raw)
+		}
+	} catch {
+		/* info.json o'qilmasa ham videoni yuboraveramiz */
+	}
+
+	return { files, info: parsedInfo }
 }
 
 /** Qidiruv so'rovi bo'yicha to'liq MP3 qo'shiqni yuklab olish (Shazam topilgandan keyin) */

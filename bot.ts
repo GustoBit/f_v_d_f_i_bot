@@ -8,10 +8,11 @@ import {
 	detectPlatform,
 	download,
 	downloadSongByQuery,
-	fetchInfo,
+	downloadWithInfo,
 	MediaInfo,
 	platformTitle,
 	Quality,
+	quickMediaInfo,
 	updateYtDlp,
 	UserError,
 } from './src/downloader'
@@ -541,6 +542,8 @@ function buildFinalCaption(job: Job, badge: string, sizeBytes: number, prefix: s
 async function sendFromCache(job: Job, quality: Quality, index: number, prefix: string): Promise<boolean> {
 	const cached = getCachedMedia(job.url, quality, job.asDocument, index)
 	if (!cached) return false
+	if (!job.info.uploader && cached.uploader) job.info.uploader = cached.uploader
+	if (!job.info.title && cached.title) job.info.title = cached.title
 	const caption = buildFinalCaption(job, cached.resLabel, cached.sizeBytes, prefix)
 	const reply_markup = index === 0 ? postDownloadKeyboard(job, quality) : undefined
 	try {
@@ -587,7 +590,7 @@ async function sendVideo(
 	const reply_markup = index === 0 ? postDownloadKeyboard(job, quality) : undefined
 
 	let thumbnail: InputFile | undefined
-	if (meta) {
+	if (meta && job.asDocument) {
 		const thumbPath = path.join(workDir, `thumb_${index}.jpg`)
 		if (await makeThumbnail(file, thumbPath, meta.duration)) thumbnail = new InputFile(thumbPath)
 	}
@@ -708,7 +711,7 @@ async function processJob(job: Job, quality: Quality): Promise<void> {
 		try {
 			const what = QUALITIES[quality]
 			status.set(d.downloading(what))
-			const files = await download(
+			const dlRes = await downloadWithInfo(
 				job.url,
 				quality,
 				path.join(workDir, 'dl'),
@@ -717,6 +720,10 @@ async function processJob(job: Job, quality: Quality): Promise<void> {
 				job.lang,
 				job.info.rawInfoJson,
 			)
+			if (dlRes.info) {
+				job.info = dlRes.info
+			}
+			const files = dlRes.files
 
 			for (const [i, file] of files.entries()) {
 				if (signal.aborted) throw new CancelledError()
@@ -1076,45 +1083,49 @@ async function handleLink(
 ): Promise<void> {
 	const prefs = getUserPrefs(userId, langCode)
 	const d = t(prefs.lang)
-	const statusMsg = await bot.api.sendMessage(chatId, d.checkingLink, {
-		reply_parameters: { message_id: replyTo, allow_sending_without_reply: true },
-	})
-	let info: MediaInfo
-	try {
-		info = await fetchInfo(url, prefs.lang)
-	} catch (err) {
-		if (!(err instanceof UserError)) console.error('Info xatolik:', err)
-		const text = err instanceof UserError ? err.message : d.genericError
-		await bot.api.editMessageText(chatId, statusMsg.message_id, text).catch(() => {})
+	const info = quickMediaInfo(url)
+
+	if (prefs.autoQuality !== 'ask' && !activeUserControllers.has(userId)) {
+		const q = prefs.autoQuality
+		const statusMsg = await bot.api.sendMessage(chatId, `${d.starting} (${QUALITIES[q]})`, {
+			reply_parameters: { message_id: replyTo, allow_sending_without_reply: true },
+		})
+		const job: Job = {
+			id: crypto.randomBytes(6).toString('base64url'),
+			url,
+			info,
+			userId,
+			chatId,
+			messageId: statusMsg.message_id,
+			asDocument: prefs.asDocument,
+			lang: prefs.lang,
+			createdAt: Date.now(),
+		}
+		processJob(job, q).catch((e) => console.error('processJob xatolik:', e))
 		return
 	}
+
 	const job: Job = {
 		id: crypto.randomBytes(6).toString('base64url'),
 		url,
 		info,
 		userId,
 		chatId,
-		messageId: statusMsg.message_id,
+		messageId: 0,
 		asDocument: prefs.asDocument,
 		lang: prefs.lang,
 		createdAt: Date.now(),
 	}
-
-	if (prefs.autoQuality !== 'ask' && !activeUserControllers.has(userId)) {
-		const q = prefs.autoQuality
-		await bot.api
-			.editMessageText(chatId, statusMsg.message_id, `${d.starting} (${QUALITIES[q]})`)
-			.catch(() => {})
-		processJob(job, q).catch((e) => console.error('processJob xatolik:', e))
-		return
-	}
-
 	jobs.set(job.id, job)
-	await bot.api.editMessageText(chatId, statusMsg.message_id, infoText(job), {
+
+	// 0.1 soniyada (kutmasdan!) format tanlash menyusini chiqaramiz
+	const menuMsg = await bot.api.sendMessage(chatId, infoText(job), {
 		parse_mode: 'HTML',
 		reply_markup: buildKeyboard(job),
 		link_preview_options: { is_disabled: true },
+		reply_parameters: { message_id: replyTo, allow_sending_without_reply: true },
 	})
+	job.messageId = menuMsg.message_id
 }
 
 bot.on('message:text', async (ctx) => {
