@@ -1482,27 +1482,79 @@ async function main() {
 		)
 		.catch(() => {})
 
-	// Cloud platformalar (Render, Koyeb, HuggingFace, Railway) uchun Health-Check HTTP server
+	// Cloud platformalar (Render, Koyeb, HuggingFace, Railway) uchun Webhook + Health-Check HTTP server
 	const port = Number(process.env.PORT || 0)
+	const externalUrl = (
+		process.env.RENDER_EXTERNAL_URL ||
+		process.env.KEEP_ALIVE_URL ||
+		(process.env.RENDER ? 'https://f-v-d-f-i-bot.onrender.com' : '')
+	).replace(/\/+$/, '')
+
+	if (port > 0 && externalUrl) {
+		// WEBHOOK REJIMI (Render / Cloud uchun eng ishonchli usul):
+		// 1) Server uxlab qolgan bo'lsa ham, Telegram'dan xabar yozilishi bilan Telegramning o'zi
+		//    https://f-v-d-f-i-bot.onrender.com/webhook ga so'rov yuborib serverni AVTOMATIK uyg'otadi!
+		// 2) Deploy paytida hech qachon 409 Conflict xatosi chiqmaydi!
+		await bot.init()
+		const webhookPath = '/webhook'
+		const webhookUrl = `${externalUrl}${webhookPath}`
+
+		const server = http.createServer((req, res) => {
+			if (req.method === 'POST' && req.url === webhookPath) {
+				const chunks: Buffer[] = []
+				req.on('data', (chunk: Buffer) => chunks.push(chunk))
+				req.on('end', () => {
+					res.writeHead(200, { 'Content-Type': 'text/plain' })
+					res.end('OK')
+					try {
+						const update = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+						bot.handleUpdate(update).catch((err) => console.error('Webhook update xatolik:', err))
+					} catch (e) {
+						console.error('Webhook JSON xatolik:', e)
+					}
+				})
+				return
+			}
+			res.writeHead(200, { 'Content-Type': 'application/json' })
+			res.end(JSON.stringify({ ok: true, mode: 'webhook', status: 'running', stats: getStats() }))
+		})
+
+		await new Promise<void>((resolve) => {
+			server.listen(port, '0.0.0.0', () => {
+				console.log(`🌐 Webhook & Health-check server port ${port} da ishga tushdi`)
+				resolve()
+			})
+		})
+
+		await bot.api.setWebhook(webhookUrl, { drop_pending_updates: false })
+		console.log(`🔗 Telegram Webhook ulandi: ${webhookUrl}`)
+		console.log(`✅ @${bot.botInfo.username} (GOD-TIER Webhook Mode) muvaffaqiyatli ishga tushdi!`)
+
+		setInterval(() => {
+			fetch(externalUrl).catch(() => {})
+		}, 10 * 60_000).unref()
+
+		const stop = () => {
+			server.close(() => process.exit(0))
+		}
+		process.once('SIGINT', stop)
+		process.once('SIGTERM', stop)
+		return
+	}
+
 	if (port > 0) {
 		http
 			.createServer((_req, res) => {
 				res.writeHead(200, { 'Content-Type': 'application/json' })
-				res.end(JSON.stringify({ ok: true, status: 'running', stats: getStats() }))
+				res.end(JSON.stringify({ ok: true, mode: 'polling', status: 'running', stats: getStats() }))
 			})
 			.listen(port, '0.0.0.0', () => {
 				console.log(`🌐 Health-check server port ${port} da ishga tushdi`)
 			})
-
-		// Render bepul tarifida uxlab qolmasligi uchun (Self-Ping Keep-Alive)
-		const externalUrl = process.env.RENDER_EXTERNAL_URL || process.env.KEEP_ALIVE_URL
-		if (externalUrl) {
-			setInterval(() => {
-				fetch(externalUrl).catch(() => {})
-			}, 10 * 60_000).unref()
-			console.log(`🔄 Keep-Alive yoqildi: ${externalUrl} (har 10 daqiqada)`)
-		}
 	}
+
+	// Localhost rejimida avvalgi webhook qolib ketgan bo'lsa o'chiramiz
+	await bot.api.deleteWebhook({ drop_pending_updates: false }).catch(() => {})
 
 	let shuttingDown = false
 	const stop = () => {
@@ -1512,14 +1564,12 @@ async function main() {
 	process.once('SIGINT', stop)
 	process.once('SIGTERM', stop)
 
-	// Render rolling-deploy paytida eski konteyner yopilguncha (5-10s) 409 Conflict bersa,
-	// konteyner qulab tushmasdan har 3 soniyada qayta ulanadi!
 	while (!shuttingDown) {
 		try {
 			await bot.start({
 				drop_pending_updates: false,
 				onStart: (botInfo) =>
-					console.log(`✅ @${botInfo.username} (GOD-TIER) muvaffaqiyatli ishga tushdi!`),
+					console.log(`✅ @${botInfo.username} (GOD-TIER Polling Mode) muvaffaqiyatli ishga tushdi!`),
 			})
 			break
 		} catch (err: any) {
