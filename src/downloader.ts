@@ -221,19 +221,43 @@ export async function fetchInfo(url: string, lang: Lang = 'uz'): Promise<MediaIn
 	return parsed
 }
 
-function formatArgs(quality: Quality): string[] {
-	// Eslatma: "res" — videoning qisqa tomoni (vertikal reels uchun ham to'g'ri ishlaydi).
-	// h264 + aac afzal ko'riladi — Telegram barcha qurilmalarda muammosiz ijro etadi.
+function formatArgs(quality: Quality, platform: Platform): string[] {
+	// MUHIM: Cloud 0.1 CPU da "Converting format..." (ffmpeg libx264) ga tushib qolmaslik uchun
+	// har doim tayyor H.264 (avc1) + AAC MP4 oqimini birinchi o'rinda olamiz!
 	switch (quality) {
 		case 'audio':
 			return ['-f', 'ba/b', '-x', '--audio-format', 'mp3', '--audio-quality', '0']
 		case 'q720':
-			return ['-f', 'bv*+ba/b', '-S', 'res:720,vcodec:h264,acodec:aac', '--merge-output-format', 'mp4']
+			return [
+				'-f',
+				'bv*[vcodec^=avc]+ba/b[ext=mp4]/bv*+ba/b',
+				'-S',
+				'vcodec:h264,res:720,acodec:aac',
+				'--merge-output-format',
+				'mp4',
+			]
 		case 'q480':
-			return ['-f', 'bv*+ba/b', '-S', 'res:480,vcodec:h264,acodec:aac', '--merge-output-format', 'mp4']
+			return [
+				'-f',
+				'bv*[vcodec^=avc]+ba/b[ext=mp4]/bv*+ba/b',
+				'-S',
+				'vcodec:h264,res:480,acodec:aac',
+				'--merge-output-format',
+				'mp4',
+			]
 		default:
-			// best / upscale: eng yuqori original sifat (alohida video + audio oqimlari birlashtiriladi)
-			return ['-f', 'bv*+ba/b', '-S', 'res,fps,vcodec:h264,acodec:aac', '--merge-output-format', 'mp4']
+			if (platform === 'instagram' && quality === 'best') {
+				// Instagram uchun tayyor H.264 MP4 ('b') 1 soniyada yuklanadi va hech qanday konvertatsiya talab qilmaydi!
+				return ['-f', 'b[ext=mp4]/bv*[vcodec^=avc]+ba/bv*+ba/b', '--merge-output-format', 'mp4']
+			}
+			return [
+				'-f',
+				'bv*[vcodec^=avc]+ba/b[ext=mp4]/bv*+ba/b',
+				'-S',
+				'vcodec:h264,res,fps,acodec:aac',
+				'--merge-output-format',
+				'mp4',
+			]
 	}
 }
 
@@ -287,7 +311,7 @@ export async function downloadWithInfo(
 	const runDownload = async (useInfoJson: boolean) => {
 		const args = [
 			...commonArgs(platform === 'youtube'),
-			...formatArgs(quality),
+			...formatArgs(quality, platform),
 			'--newline',
 			'--progress-template',
 			'download:__P__%(progress._percent_str)s',

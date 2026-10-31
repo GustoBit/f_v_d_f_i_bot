@@ -468,6 +468,15 @@ async function prepareVideo(
 ): Promise<Prepared> {
 	const d = t(lang)
 	const upTarget = quality === 'up2160' ? 2160 : quality === 'up1440' ? 1440 : 0
+	const fileSize = fs.statSync(file).size
+
+	// MUHIM TEZLIK OPTIMIZATSIYASI:
+	// Agar foydalanuvchi 2K/4K upscale so'ramagan bo'lsa (Original, 720p, 480p) va fayl 50MB dan kichik bo'lsa,
+	// ffmpeg "Converting format..." ni UMUMAN ishga tushirmaymiz — videoni 1 soniyada to'g'ridan-to'g'ri yuboramiz!
+	if (!upTarget && fileSize <= MAX_UPLOAD_BYTES) {
+		return { file, meta: null }
+	}
+
 	if (!ffmpegOk) {
 		if (upTarget) throw new UserError(d.errNoFfmpeg)
 		return { file, meta: null }
@@ -490,27 +499,16 @@ async function prepareVideo(
 		await encodeVideo(current, out, meta, {
 			targetShort: upTarget,
 			maxKbps: budget,
-			crf: 17,
+			crf: 20,
 			sharpen: true,
 			signal,
 			onProgress: (p) => status.set(`${prefix}${d.upscaling(label)}\n${progressBar(p)}`),
 		})
 		current = out
 		meta = await probe(current)
-	} else if (!['h264', 'hevc'].includes(meta.vcodec)) {
-		// 2) VP9/AV1 bo'lsa — barcha qurilmalarda ishlashi uchun H.264 ga o'tkazish
-		const out = path.join(workDir, `${base}_h264.mp4`)
-		await encodeVideo(current, out, meta, {
-			crf: 18,
-			maxKbps: bitrateBudgetKbps(meta.duration, MAX_UPLOAD_BYTES),
-			signal,
-			onProgress: (p) => status.set(`${prefix}${d.converting}\n${progressBar(p)}`),
-		})
-		current = out
-		meta = await probe(current)
 	}
 
-	// 3) Telegram limitidan katta bo'lsa — siqish
+	// 2) Telegram limitidan katta bo'lsa — siqish
 	if (fs.statSync(current).size > MAX_UPLOAD_BYTES) {
 		const budget = bitrateBudgetKbps(meta.duration, MAX_UPLOAD_BYTES)
 		if (upTarget || budget < 300) {
@@ -518,7 +516,7 @@ async function prepareVideo(
 		}
 		const out = path.join(workDir, `${base}_fit.mp4`)
 		await encodeVideo(current, out, meta, {
-			crf: 20,
+			crf: 22,
 			maxKbps: budget,
 			signal,
 			onProgress: (p) => status.set(`${prefix}${d.compressing}\n${progressBar(p)}`),

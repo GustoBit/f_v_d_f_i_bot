@@ -98,8 +98,10 @@ export async function encodeVideo(
 		'libx264',
 		'-preset',
 		config.x264Preset,
+		'-threads',
+		'2',
 		'-crf',
-		String(opts.crf ?? 18),
+		String(opts.crf ?? 20),
 		'-profile:v',
 		'high',
 	]
